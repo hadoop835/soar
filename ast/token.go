@@ -676,7 +676,7 @@ func getNextToken(buf string, previous Token) Token {
 	}
 
 	// Comment (#, --, /**/)
-	if buf[0] == '#' || (len(buf) > 1 && (buf[0] == '-' && buf[1] == '-')) || (buf[0] == '/' && buf[1] == '*') {
+	if buf[0] == '#' || (len(buf) > 1 && (buf[:2] == "--" || buf[:2] == "/*")) {
 		var last int
 		if buf[0] == '-' || buf[0] == '#' {
 			// Comment until end of line
@@ -685,6 +685,7 @@ func getNextToken(buf string, previous Token) Token {
 		} else {
 			// Comment until closing comment tag
 			last = strings.Index(buf[2:], "*/") + 2
+			typ = TokenTypeBlockComment
 		}
 		if last == 0 {
 			last = len(buf)
@@ -943,6 +944,14 @@ func SplitStatement(buf []byte, delimiter []byte) (string, []byte) {
 			if multiLineComment && !quoted && !singleLineComment {
 				i = i + 2
 				multiLineComment = false
+				// '/*comment*/'
+				if i == len(buf) {
+					sql = string(buf[:i])
+				}
+				// '/*comment*/;', 'select 1/*comment*/;'
+				if string(buf[i:]) == string(delimiter) {
+					sql = string(buf)
+				}
 				continue
 			}
 		}

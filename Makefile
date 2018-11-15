@@ -16,8 +16,11 @@ BUILD_TIME=`date +%Y%m%d%H%M`
 COMMIT_VERSION=`git rev-parse HEAD`
 GO_VERSION_MIN=1.10
 
-# Add mysql version for testing `MYSQL_VERSION=5.7 make docker`
+# Add mysql version for testing `MYSQL_RELEASE=percona MYSQL_VERSION=5.7 make docker`
+# MYSQL_RELEASE: mysql, percona, mariadb ...
+# MYSQL_VERSION: latest, 8.0, 5.7, 5.6, 5.5 ...
 # use mysql:latest as default
+MYSQL_RELEASE := $(or ${MYSQL_RELEASE}, ${MYSQL_RELEASE}, mysql)
 MYSQL_VERSION := $(or ${MYSQL_VERSION}, ${MYSQL_VERSION}, latest)
 
 .PHONY: all
@@ -67,9 +70,11 @@ cover: test
 # Builds the project
 build: fmt tidb-parser
 	@echo "\033[92mBuilding ...\033[0m"
+	@mkdir -p bin
 	@bash ./genver.sh $(GO_VERSION_MIN)
 	@ret=0 && for d in $$(go list -f '{{if (eq .Name "main")}}{{.ImportPath}}{{end}}' ./...); do \
-		go build $$d || ret=$$? ; \
+		b=$$(basename $${d}) ; \
+		go build -o bin/$${b} $$d || ret=$$? ; \
 	done ; exit $$ret
 	@echo "build Success!"
 
@@ -78,7 +83,8 @@ fast:
 	@echo "\033[92mBuilding ...\033[0m"
 	@bash ./genver.sh $(GO_VERSION_MIN)
 	@ret=0 && for d in $$(go list -f '{{if (eq .Name "main")}}{{.ImportPath}}{{end}}' ./...); do \
-		go build $$d || ret=$$? ; \
+		b=$$(basename $${d}) ; \
+		go build -o bin/$${b} $$d || ret=$$? ; \
 	done ; exit $$ret
 	@echo "build Success!"
 
@@ -92,9 +98,9 @@ install: build
 .PHONY: doc
 doc: fast
 	@echo "\033[92mAuto generate doc ...\033[0m"
-	./soar -list-heuristic-rules > doc/heuristic.md
-	./soar -list-rewrite-rules > doc/rewrite.md
-	./soar -list-report-types > doc/report_type.md
+	./bin/soar -list-heuristic-rules > doc/heuristic.md
+	./bin/soar -list-rewrite-rules > doc/rewrite.md
+	./bin/soar -list-report-types > doc/report_type.md
 
 # Add or change a heuristic rule
 .PHONY: heuristic
@@ -116,9 +122,9 @@ tidb:
 	@echo "\033[92mUpdate tidb deps ...\033[0m"
 	@echo -n "Current TiDB commit hash: "
 	@(cd ${GOPATH}/src/github.com/pingcap/tidb/ 2>/dev/null && git checkout master && git rev-parse HEAD) || echo "(init)"
-	go get -v -u github.com/pingcap/tidb/store/tikv
+	@(go get -v -d github.com/pingcap/tidb/... || echo "go get tidb")
 	@echo -n "TiDB update to: "
-	@cd ${GOPATH}/src/github.com/pingcap/tidb/ && git rev-parse HEAD
+	@cd ${GOPATH}/src/github.com/pingcap/tidb/ && git pull && git rev-parse HEAD
 
 # Update all vendor
 .PHONY: vendor
@@ -144,12 +150,13 @@ lint: build
 .PHONY: release
 release: deps build
 	@echo "\033[92mCross platform building for release ...\033[0m"
+	@mkdir -p release
 	@for GOOS in darwin linux windows; do \
-		for GOARCH in 386 amd64; do \
+		for GOARCH in amd64; do \
 			for d in $$(go list -f '{{if (eq .Name "main")}}{{.ImportPath}}{{end}}' ./...); do \
 				b=$$(basename $${d}) ; \
 				echo "Building $${b}.$${GOOS}-$${GOARCH} ..."; \
-				GOOS=$${GOOS} GOARCH=$${GOARCH} go build -ldflags="-s -w" -v -o $${b}.$${GOOS}-$${GOARCH} $$d 2>/dev/null ; \
+				GOOS=$${GOOS} GOARCH=$${GOARCH} go build -ldflags="-s -w" -v -o release/$${b}.$${GOOS}-$${GOARCH} $$d 2>/dev/null ; \
 			done ; \
 		done ;\
 	done
@@ -158,13 +165,13 @@ release: deps build
 docker:
 	@echo "\033[92mBuild mysql test enviorment\033[0m"
 	@docker stop soar-mysql 2>/dev/null || true
-	@echo "docker run --name soar-mysql mysql:$(MYSQL_VERSION)"
+	@echo "docker run --name soar-mysql $(MYSQL_RELEASE):$(MYSQL_VERSION)"
 	@docker run --name soar-mysql --rm -d \
 	-e MYSQL_ROOT_PASSWORD=1tIsB1g3rt \
 	-e MYSQL_DATABASE=sakila \
 	-p 3306:3306 \
 	-v `pwd`/doc/example/sakila.sql.gz:/docker-entrypoint-initdb.d/sakila.sql.gz \
-	mysql:$(MYSQL_VERSION)
+	$(MYSQL_RELEASE):$(MYSQL_VERSION)
 
 	@echo -n "waiting for sakila database initializing "
 	@while ! mysql -h 127.0.0.1 -u root sakila -p1tIsB1g3rt -NBe "do 1;" 2>/dev/null; do \
@@ -176,7 +183,7 @@ docker:
 
 .PHONY: connect
 connect:
-	mysql -h 127.0.0.1 -u root -p1tIsB1g3rt
+	mysql -h 127.0.0.1 -u root -p1tIsB1g3rt -c
 
 .PHONY: main_test
 main_test: install

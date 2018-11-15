@@ -19,6 +19,7 @@ package env
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/XiaoMi/soar/ast"
 	"github.com/XiaoMi/soar/common"
@@ -34,8 +35,8 @@ type VirtualEnv struct {
 	*database.Connector
 
 	// 保存DB测试环境映射关系，防止vEnv环境冲突。
-	DBRef   map[string]string
-	hash2Db map[string]string
+	DBRef   map[string]string // db -> optimizer_xxx
+	hash2Db map[string]string // optimizer_xxx -> db
 	// 保存Table创建关系，防止重复创建表
 	TableMap map[string]map[string]string
 	// 错误
@@ -149,6 +150,46 @@ func (ve VirtualEnv) CleanUp() bool {
 	return true
 }
 
+// CleanupTestDatabase 清除一小时前的环境
+func (ve *VirtualEnv) CleanupTestDatabase() {
+	common.Log.Debug("CleanupTestDatabase ...")
+	dbs, err := ve.Query("show databases like 'optimizer%%'")
+	if err != nil {
+		common.Log.Error("CleanupTestDatabase failed Error:%s", err.Error())
+		return
+	}
+
+	// TODO: 1 hour should be config-able
+	minHour := 1
+	for _, row := range dbs.Rows {
+		testDatabase := row.Str(0)
+		// test temporary database format `optimizer_YYMMDDHHmmss_randomString(16)`
+		if len(testDatabase) != 39 {
+			common.Log.Debug("CleanupTestDatabase by pass %s", testDatabase)
+			continue
+		}
+		s := strings.Split(testDatabase, "_")
+		pastTime, err := time.Parse("060102150405", s[1])
+		if err != nil {
+			common.Log.Error("CleanupTestDatabase compute  pastTime Error: %s", err.Error())
+			continue
+		}
+
+		subHour := time.Since(pastTime).Hours()
+		if subHour > float64(minHour) {
+			if _, err := ve.Query("drop database %s", testDatabase); err != nil {
+				common.Log.Error("CleanupTestDatabase failed Error: %s", err.Error())
+				continue
+			}
+			common.Log.Debug("CleanupTestDatabase drop database %s success", testDatabase)
+			continue
+		}
+		common.Log.Debug("CleanupTestDatabase by pass database %s, %.2f less than %d hours", testDatabase, subHour, minHour)
+	}
+
+	common.Log.Debug("CleanupTestDatabase done")
+}
+
 // BuildVirtualEnv rEnv为SQL源环境，DB使用的信息从接口获取
 // 注意：如果是USE,DDL等语句，执行完第一条就会返回，后面的SQL不会执行
 func (ve *VirtualEnv) BuildVirtualEnv(rEnv *database.Connector, SQLs ...string) bool {
@@ -207,18 +248,37 @@ func (ve *VirtualEnv) BuildVirtualEnv(rEnv *database.Connector, SQLs ...string) 
 
 			// 为了支持并发，需要将DB进行映射，但db.table这种形式无法保证DB的映射是正确的
 			// TODO：暂不支持 create db.tableName (id int) 形式的建表语句
-			if stmt.Table.Qualifier.String() != "" || stmt.NewName.Qualifier.String() != "" {
+			if stmt.Table.Qualifier.String() != "" {
 				common.Log.Error("BuildVirtualEnv DDL Not support '.'")
 				return false
+			}
+
+			for _, tb := range stmt.FromTables {
+				if tb.Qualifier.String() != "" {
+					common.Log.Error("BuildVirtualEnv DDL Not support '.'")
+					return false
+				}
+			}
+
+			for _, tb := range stmt.ToTables {
+				if tb.Qualifier.String() != "" {
+					common.Log.Error("BuildVirtualEnv DDL Not support '.'")
+					return false
+				}
 			}
 
 			// 拉取表结构
 			table := stmt.Table.Name.String()
 			if table != "" {
 				err = ve.createTable(*rEnv, rEnv.Database, table)
+				// 这里如果报错可能有两种可能：
+				// 1. SQL 是 Create 语句，线上环境并没有相关的库表结构
+				// 2. 在测试环境中执行 SQL 报错
+				// 如果是因为 Create 语句报错，后续会在测试环境中直接执行 create 语句，不会对程序有负面影响
+				// 如果是因为执行 SQL 报错，那么其他地方执行 SQL 的时候也一定会报错
+				// 所以这里不需要 `return false`，可以继续执行
 				if err != nil {
 					common.Log.Error("BuildVirtualEnv Error : %v", err)
-					return false
 				}
 			}
 
@@ -294,7 +354,8 @@ func (ve VirtualEnv) createDatabase(rEnv database.Connector, dbName string) erro
 		return nil
 	}
 
-	dbHash := "optimizer_" + uniuri.New()
+	// optimizer_YYMMDDHHmmss_xxxx
+	dbHash := fmt.Sprintf("optimizer_%s_%s", time.Now().Format("060102150405"), uniuri.New())
 	common.Log.Debug("createDatabase, mapping `%s` :`%s`-->`%s`", dbName, dbName, dbHash)
 	ddl, err := rEnv.ShowCreateDatabase(dbName)
 	if err != nil {
@@ -332,7 +393,7 @@ func (ve VirtualEnv) createDatabase(rEnv database.Connector, dbName string) erro
 			如果一个SQL中存在多个数据库，则只能有一个数据库是没有在SQL中被显示指定的（即DSN中指定的数据库）
 	TODO:
 		在一些可能的情况下，由于数据库配置的不一致（如SQL_MODE不同）导致remote环境的库表无法正确的在测试环境进行同步，
-		soar能够做出判断并进行session级别的修改，但是这一阶段可用性保证应该是由用户提供两个完全相同（或测试环境兼容线上环境）
+		soar 能够做出判断并进行 session 级别的修改，但是这一阶段可用性保证应该是由用户提供两个完全相同（或测试环境兼容线上环境）
 		的数据库环境来实现的。
 */
 func (ve VirtualEnv) createTable(rEnv database.Connector, dbName, tbName string) error {

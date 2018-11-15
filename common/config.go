@@ -26,24 +26,35 @@ import (
 	"io/ioutil"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v2"
 )
 
-// BlackList 黑名单中的SQL不会被评审
-var BlackList []string
-var hasParsed bool
+var (
+	// BlackList 黑名单中的SQL不会被评审
+	BlackList []string
+	// PrintConfig -print-config
+	PrintConfig bool
+	// PrintVersion -print-config
+	PrintVersion bool
+	// CheckConfig -check-config
+	CheckConfig bool
+	// 防止 readCmdFlags 函数重入
+	hasParsed bool
+)
 
-// Configration 配置文件定义结构体
-type Configration struct {
+// Configuration 配置文件定义结构体
+type Configuration struct {
 	// +++++++++++++++测试环境+++++++++++++++++
 	OnlineDSN               *dsn   `yaml:"online-dsn"`                // 线上环境数据库配置
 	TestDSN                 *dsn   `yaml:"test-dsn"`                  // 测试环境数据库配置
-	AllowOnlineAsTest       bool   `yaml:"allow-online-as-test"`      // 允许Online环境也可以当作Test环境
+	AllowOnlineAsTest       bool   `yaml:"allow-online-as-test"`      // 允许 Online 环境也可以当作 Test 环境
 	DropTestTemporary       bool   `yaml:"drop-test-temporary"`       // 是否清理Test环境产生的临时库表
+	CleanupTestDatabase     bool   `yaml:"cleanup-test-database"`     // 清理残余的测试数据库（程序异常退出或未开启drop-test-temporary）  issue #48
 	OnlySyntaxCheck         bool   `yaml:"only-syntax-check"`         // 只做语法检查不输出优化建议
-	SamplingStatisticTarget int    `yaml:"sampling-statistic-target"` // 数据采样因子，对应postgres的default_statistics_target
+	SamplingStatisticTarget int    `yaml:"sampling-statistic-target"` // 数据采样因子，对应 PostgreSQL 的 default_statistics_target
 	Sampling                bool   `yaml:"sampling"`                  // 数据采样开关
 	Profiling               bool   `yaml:"profiling"`                 // 在开启数据采样的情况下，在测试环境执行进行profile
 	Trace                   bool   `yaml:"trace"`                     // 在开启数据采样的情况下，在测试环境执行进行Trace
@@ -53,41 +64,41 @@ type Configration struct {
 	Delimiter               string `yaml:"delimiter"`                 // SQL分隔符
 
 	// +++++++++++++++日志相关+++++++++++++++++
-	// 日志级别，这里使用了beego的log包
+	// 日志级别，这里使用了 beego 的 log 包
 	// [0:Emergency, 1:Alert, 2:Critical, 3:Error, 4:Warning, 5:Notice, 6:Informational, 7:Debug]
 	LogLevel int `yaml:"log-level"`
 	// 日志输出位置，默认日志输出到控制台
 	// 目前只支持['console', 'file']两种形式，如非console形式这里需要指定文件的路径，可以是相对路径
 	LogOutput string `yaml:"log-output"`
-	// 优化建议输出格式，目前支持: json, text, markdown格式，如指定其他格式会给pretty.Println的输出
+	// 优化建议输出格式，目前支持: json, text, markdown格式，如指定其他格式会给 pretty.Println 的输出
 	ReportType string `yaml:"report-type"`
-	// 当ReportType为html格式时使用的css风格，如不指定会提供一个默认风格。CSS可以是本地文件，也可以是一个URL
+	// 当 ReportType 为 html 格式时使用的 css 风格，如不指定会提供一个默认风格。CSS可 以是本地文件，也可以是一个URL
 	ReportCSS string `yaml:"report-css"`
-	// 当ReportType为html格式时使用的javascript脚本，如不指定默认会加载SQL pretty使用的javascript。像CSS一样可以是本地文件，也可以是一个URL
+	// 当 ReportType 为 html 格式时使用的 javascript 脚本，如不指定默认会加载SQL pretty 使用的 javascript。像CSS一样可以是本地文件，也可以是一个URL
 	ReportJavascript string `yaml:"report-javascript"`
-	// 当ReportType为html格式时，HTML的title
+	// 当ReportType 为 html 格式时，HTML 的 title
 	ReportTitle string `yaml:"report-title"`
 	// blackfriday markdown2html config
-	MarkdownExtensions int `yaml:"markdown-extensions"` // markdown转html支持的扩展包, 参考blackfriday
-	MarkdownHTMLFlags  int `yaml:"markdown-html-flags"` // markdown转html支持的flag, 参考blackfriday, default 0
+	MarkdownExtensions int `yaml:"markdown-extensions"` // markdown 转 html 支持的扩展包, 参考blackfriday
+	MarkdownHTMLFlags  int `yaml:"markdown-html-flags"` // markdown 转 html 支持的 flag, 参考blackfriday, default 0
 
 	// ++++++++++++++优化建议相关++++++++++++++
 	IgnoreRules          []string `yaml:"ignore-rules"`              // 忽略的优化建议规则
 	RewriteRules         []string `yaml:"rewrite-rules"`             // 生效的重写规则
-	BlackList            string   `yaml:"blacklist"`                 // blacklist中的SQL不会被评审，可以是指纹，也可以是正则
-	MaxJoinTableCount    int      `yaml:"max-join-table-count"`      // 单条SQL中JOIN表的最大数量
-	MaxGroupByColsCount  int      `yaml:"max-group-by-cols-count"`   // 单条SQL中GroupBy包含列的最大数量
-	MaxDistinctCount     int      `yaml:"max-distinct-count"`        // 单条SQL中Distinct的最大数量
+	BlackList            string   `yaml:"blacklist"`                 // blacklist 中的 SQL 不会被评审，可以是指纹，也可以是正则
+	MaxJoinTableCount    int      `yaml:"max-join-table-count"`      // 单条 SQL 中 JOIN 表的最大数量
+	MaxGroupByColsCount  int      `yaml:"max-group-by-cols-count"`   // 单条 SQL 中 GroupBy 包含列的最大数量
+	MaxDistinctCount     int      `yaml:"max-distinct-count"`        // 单条 SQL 中 Distinct 的最大数量
 	MaxIdxColsCount      int      `yaml:"max-index-cols-count"`      // 复合索引中包含列的最大数量
-	MaxTotalRows         int64    `yaml:"max-total-rows"`            // 计算散粒度时，当数据行数大于 MaxTotalRows即开启数据库保护模式，散粒度返回结果可信度下降
+	MaxTotalRows         int64    `yaml:"max-total-rows"`            // 计算散粒度时，当数据行数大于 MaxTotalRows 即开启数据库保护模式，散粒度返回结果可信度下降
 	MaxQueryCost         int64    `yaml:"max-query-cost"`            // last_query_cost 超过该值时将给予警告
 	SpaghettiQueryLength int      `yaml:"spaghetti-query-length"`    // SQL最大长度警告，超过该长度会给警告
 	AllowDropIndex       bool     `yaml:"allow-drop-index"`          // 允许输出删除重复索引的建议
 	MaxInCount           int      `yaml:"max-in-count"`              // IN()最大数量
 	MaxIdxBytesPerColumn int      `yaml:"max-index-bytes-percolumn"` // 索引中单列最大字节数，默认767
 	MaxIdxBytes          int      `yaml:"max-index-bytes"`           // 索引总长度限制，默认3072
-	TableAllowCharsets   []string `yaml:"table-allow-charsets"`      // Table允许使用的DEFAULT CHARSET
-	TableAllowEngines    []string `yaml:"table-allow-engines"`       // Table允许使用的Engine
+	TableAllowCharsets   []string `yaml:"table-allow-charsets"`      // Table 允许使用的 DEFAULT CHARSET
+	TableAllowEngines    []string `yaml:"table-allow-engines"`       // Table 允许使用的 Engine
 	MaxIdxCount          int      `yaml:"max-index-count"`           // 单张表允许最多索引数
 	MaxColCount          int      `yaml:"max-column-count"`          // 单张表允许最大列数
 	IdxPrefix            string   `yaml:"index-prefix"`              // 普通索引建议使用的前缀
@@ -96,16 +107,16 @@ type Configration struct {
 	MaxVarcharLength     int      `yaml:"max-varchar-length"`        // varchar最大长度
 
 	// ++++++++++++++EXPLAIN检查项+++++++++++++
-	ExplainSQLReportType   string   `yaml:"explain-sql-report-type"`  // EXPLAIN markdown格式输出SQL样式，支持sample, fingerprint, pretty
+	ExplainSQLReportType   string   `yaml:"explain-sql-report-type"`  // EXPLAIN markdown 格式输出 SQL 样式，支持 sample, fingerprint, pretty 等
 	ExplainType            string   `yaml:"explain-type"`             // EXPLAIN方式 [traditional, extended, partitions]
 	ExplainFormat          string   `yaml:"explain-format"`           // FORMAT=[json, traditional]
-	ExplainWarnSelectType  []string `yaml:"explain-warn-select-type"` // 哪些select_type不建议使用
-	ExplainWarnAccessType  []string `yaml:"explain-warn-access-type"` // 哪些access type不建议使用
-	ExplainMaxKeyLength    int      `yaml:"explain-max-keys"`         // 最大key_len
-	ExplainMinPossibleKeys int      `yaml:"explain-min-keys"`         // 最小possible_keys警告
+	ExplainWarnSelectType  []string `yaml:"explain-warn-select-type"` // 哪些 select_type 不建议使用
+	ExplainWarnAccessType  []string `yaml:"explain-warn-access-type"` // 哪些 access type 不建议使用
+	ExplainMaxKeyLength    int      `yaml:"explain-max-keys"`         // 最大 key_len
+	ExplainMinPossibleKeys int      `yaml:"explain-min-keys"`         // 最小 possible_keys 警告
 	ExplainMaxRows         int      `yaml:"explain-max-rows"`         // 最大扫描行数警告
-	ExplainWarnExtra       []string `yaml:"explain-warn-extra"`       // 哪些extra信息会给警告
-	ExplainMaxFiltered     float64  `yaml:"explain-max-filtered"`     // filtered大于该配置给出警告
+	ExplainWarnExtra       []string `yaml:"explain-warn-extra"`       // 哪些 extra 信息会给警告
+	ExplainMaxFiltered     float64  `yaml:"explain-max-filtered"`     // filtered 大于该配置给出警告
 	ExplainWarnScalability []string `yaml:"explain-warn-scalability"` // 复杂度警告名单
 	ShowWarnings           bool     `yaml:"show-warnings"`            // explain extended with show warnings
 	ShowLastQueryCost      bool     `yaml:"show-last-query-cost"`     // switch with show status like 'last_query_cost'
@@ -120,22 +131,31 @@ type Configration struct {
 	MaxPrettySQLLength int    `yaml:"max-pretty-sql-length"` // 超出该长度的SQL会转换成指纹输出
 }
 
+// getDefaultLogOutput get default log-output by runtime.GOOS
+func getDefaultLogOutput() string {
+	if runtime.GOOS == "windows" {
+		return "nul"
+	}
+	return os.Stderr.Name()
+}
+
 // Config 默认设置
-var Config = &Configration{
+var Config = &Configuration{
 	OnlineDSN: &dsn{
 		Schema:  "information_schema",
 		Charset: "utf8mb4",
 		Disable: true,
-		Version: 999,
+		Version: 99999,
 	},
 	TestDSN: &dsn{
 		Schema:  "information_schema",
 		Charset: "utf8mb4",
 		Disable: true,
-		Version: 999,
+		Version: 99999,
 	},
 	AllowOnlineAsTest:       false,
 	DropTestTemporary:       true,
+	CleanupTestDatabase:     false,
 	DryRun:                  true,
 	OnlySyntaxCheck:         false,
 	SamplingStatisticTarget: 100,
@@ -158,7 +178,7 @@ var Config = &Configration{
 	SpaghettiQueryLength: 2048,
 	AllowDropIndex:       false,
 	LogLevel:             3,
-	LogOutput:            os.Stderr.Name(),
+	LogOutput:            getDefaultLogOutput(),
 	ReportType:           "markdown",
 	ReportCSS:            "",
 	ReportJavascript:     "",
@@ -228,6 +248,10 @@ type dsn struct {
 // 解析命令行DSN输入
 func parseDSN(odbc string, d *dsn) *dsn {
 	var addr, user, password, schema, charset string
+	if odbc == FormatDSN(d) {
+		return d
+	}
+
 	if d != nil {
 		addr = d.Addr
 		user = d.User
@@ -242,7 +266,7 @@ func parseDSN(odbc string, d *dsn) *dsn {
 		return &dsn{Disable: true}
 	}
 
-	// username:password@ip:port/dbname
+	// username:password@ip:port/database
 	l1 := strings.Split(odbc, "@")
 	if len(l1) < 2 {
 		if strings.HasPrefix(l1[0], ":") {
@@ -264,7 +288,7 @@ func parseDSN(odbc string, d *dsn) *dsn {
 			l2 := strings.TrimLeft(l1[0], "/")
 			schema = l2
 		} else {
-			// ip:port/dbname
+			// ip:port/database
 			l2 := strings.Split(l1[0], "/")
 			if len(l2) == 2 {
 				addr = l2[0]
@@ -282,7 +306,7 @@ func parseDSN(odbc string, d *dsn) *dsn {
 		} else {
 			user = l2[0]
 		}
-		// ip:port/dbname
+		// ip:port/database
 		l3 := strings.Split(l1[1], "/")
 		if len(l3) == 2 {
 			addr = l3[0]
@@ -347,21 +371,22 @@ func parseDSN(odbc string, d *dsn) *dsn {
 
 // FormatDSN 格式化打印DSN
 func FormatDSN(env *dsn) string {
-	if env.Disable {
+	if env == nil || env.Disable {
 		return ""
 	}
 	// username:password@ip:port/schema?charset=xxx
 	return fmt.Sprintf("%s:%s@%s/%s?charset=%s", env.User, env.Password, env.Addr, env.Schema, env.Charset)
 }
 
-func version() {
+// SoarVersion soar version information
+func SoarVersion() {
 	fmt.Println("Version:", Version)
 	fmt.Println("Branch:", Branch)
 	fmt.Println("Compile:", Compile)
 	fmt.Println("GitDirty:", GitDirty)
 }
 
-// 因为vitess sqlparser使用了glog中也会使用flag，为了不让用户困扰我们单独写一个usage
+// 因为vitess sqlparser 使用了 glog 中也会使用 flag，为了不让用户困扰我们单独写一个 usage
 func usage() {
 	regPwd := regexp.MustCompile(`:.*@`)
 	vitessHelp := []string{
@@ -429,8 +454,19 @@ func usage() {
 	}
 }
 
+// PrintConfiguration for `-print-config` flag
+func PrintConfiguration() {
+	// 打印配置的时候密码不显示
+	if !Config.Verbose {
+		Config.OnlineDSN.Password = "********"
+		Config.TestDSN.Password = "********"
+	}
+	data, _ := yaml.Marshal(Config)
+	fmt.Print(string(data))
+}
+
 // 加载配置文件
-func (conf *Configration) readConfigFile(path string) error {
+func (conf *Configuration) readConfigFile(path string) error {
 	configFile, err := os.Open(path)
 	if err != nil {
 		Log.Warning("readConfigFile(%s) os.Open failed: %v", path, err)
@@ -459,18 +495,19 @@ func readCmdFlags() error {
 		return nil
 	}
 
-	config := flag.String("config", "", "Config file path")
+	_ = flag.String("config", "", "Config file path")
 	// +++++++++++++++测试环境+++++++++++++++++
 	onlineDSN := flag.String("online-dsn", FormatDSN(Config.OnlineDSN), "OnlineDSN, 线上环境数据库配置, username:password@ip:port/schema")
 	testDSN := flag.String("test-dsn", FormatDSN(Config.TestDSN), "TestDSN, 测试环境数据库配置, username:password@ip:port/schema")
 	allowOnlineAsTest := flag.Bool("allow-online-as-test", Config.AllowOnlineAsTest, "AllowOnlineAsTest, 允许线上环境也可以当作测试环境")
 	dropTestTemporary := flag.Bool("drop-test-temporary", Config.DropTestTemporary, "DropTestTemporary, 是否清理测试环境产生的临时库表")
+	cleanupTestDatabase := flag.Bool("cleanup-test-database", Config.CleanupTestDatabase, "单次运行清理历史1小时前残余的测试库。")
 	onlySyntaxCheck := flag.Bool("only-syntax-check", Config.OnlySyntaxCheck, "OnlySyntaxCheck, 只做语法检查不输出优化建议")
 	profiling := flag.Bool("profiling", Config.Profiling, "Profiling, 开启数据采样的情况下在测试环境执行Profile")
 	trace := flag.Bool("trace", Config.Trace, "Trace, 开启数据采样的情况下在测试环境执行Trace")
-	explain := flag.Bool("explain", Config.Explain, "Explain, 是否开启Exaplin执行计划分析")
+	explain := flag.Bool("explain", Config.Explain, "Explain, 是否开启Explain执行计划分析")
 	sampling := flag.Bool("sampling", Config.Sampling, "Sampling, 数据采样开关")
-	samplingStatisticTarget := flag.Int("sampling-statistic-target", Config.SamplingStatisticTarget, "SamplingStatisticTarget, 数据采样因子，对应postgres的default_statistics_target")
+	samplingStatisticTarget := flag.Int("sampling-statistic-target", Config.SamplingStatisticTarget, "SamplingStatisticTarget, 数据采样因子，对应 PostgreSQL 的 default_statistics_target")
 	connTimeOut := flag.Int("conn-time-out", Config.ConnTimeOut, "ConnTimeOut, 数据库连接超时时间，单位秒")
 	queryTimeOut := flag.Int("query-time-out", Config.QueryTimeOut, "QueryTimeOut, 数据库SQL执行超时时间，单位秒")
 	delimiter := flag.String("delimiter", Config.Delimiter, "Delimiter, SQL分隔符")
@@ -478,19 +515,19 @@ func readCmdFlags() error {
 	logLevel := flag.Int("log-level", Config.LogLevel, "LogLevel, 日志级别, [0:Emergency, 1:Alert, 2:Critical, 3:Error, 4:Warning, 5:Notice, 6:Informational, 7:Debug]")
 	logOutput := flag.String("log-output", Config.LogOutput, "LogOutput, 日志输出位置")
 	reportType := flag.String("report-type", Config.ReportType, "ReportType, 化建议输出格式，目前支持: json, text, markdown, html等")
-	reportCSS := flag.String("report-css", Config.ReportCSS, "ReportCSS, 当ReportType为html格式时使用的css风格，如不指定会提供一个默认风格。CSS可以是本地文件，也可以是一个URL")
-	reportJavascript := flag.String("report-javascript", Config.ReportJavascript, "ReportJavascript, 当ReportType为html格式时使用的javascript脚本，如不指定默认会加载SQL pretty使用的javascript。像CSS一样可以是本地文件，也可以是一个URL")
-	reportTitle := flag.String("report-title", Config.ReportTitle, "ReportTitle, 当ReportType为html格式时，HTML的title")
+	reportCSS := flag.String("report-css", Config.ReportCSS, "ReportCSS, 当 ReportType 为 html 格式时使用的 css 风格，如不指定会提供一个默认风格。CSS可以是本地文件，也可以是一个URL")
+	reportJavascript := flag.String("report-javascript", Config.ReportJavascript, "ReportJavascript, 当 ReportType 为 html 格式时使用的javascript脚本，如不指定默认会加载SQL pretty 使用的 javascript。像CSS一样可以是本地文件，也可以是一个URL")
+	reportTitle := flag.String("report-title", Config.ReportTitle, "ReportTitle, 当 ReportType 为 html 格式时，HTML 的 title")
 	// +++++++++++++++markdown+++++++++++++++++
-	markdownExtensions := flag.Int("markdown-extensions", Config.MarkdownExtensions, "MarkdownExtensions, markdown转html支持的扩展包, 参考blackfriday")
-	markdownHTMLFlags := flag.Int("markdown-html-flags", Config.MarkdownHTMLFlags, "MarkdownHTMLFlags, markdown转html支持的flag, 参考blackfriday")
+	markdownExtensions := flag.Int("markdown-extensions", Config.MarkdownExtensions, "MarkdownExtensions, markdown 转 html支持的扩展包, 参考blackfriday")
+	markdownHTMLFlags := flag.Int("markdown-html-flags", Config.MarkdownHTMLFlags, "MarkdownHTMLFlags, markdown 转 html 支持的 flag, 参考blackfriday")
 	// ++++++++++++++优化建议相关++++++++++++++
 	ignoreRules := flag.String("ignore-rules", strings.Join(Config.IgnoreRules, ","), "IgnoreRules, 忽略的优化建议规则")
 	rewriteRules := flag.String("rewrite-rules", strings.Join(Config.RewriteRules, ","), "RewriteRules, 生效的重写规则")
-	blackList := flag.String("blacklist", Config.BlackList, "blacklist中的SQL不会被评审，可以是指纹，也可以是正则")
-	maxJoinTableCount := flag.Int("max-join-table-count", Config.MaxJoinTableCount, "MaxJoinTableCount, 单条SQL中JOIN表的最大数量")
-	maxGroupByColsCount := flag.Int("max-group-by-cols-count", Config.MaxGroupByColsCount, "MaxGroupByColsCount, 单条SQL中GroupBy包含列的最大数量")
-	maxDistinctCount := flag.Int("max-distinct-count", Config.MaxDistinctCount, "MaxDistinctCount, 单条SQL中Distinct的最大数量")
+	blackList := flag.String("blacklist", Config.BlackList, "指定 blacklist 配置文件的位置，文件中的 SQL 不会被评审。一行一条SQL，可以是指纹，也可以是正则")
+	maxJoinTableCount := flag.Int("max-join-table-count", Config.MaxJoinTableCount, "MaxJoinTableCount, 单条 SQL 中 JOIN 表的最大数量")
+	maxGroupByColsCount := flag.Int("max-group-by-cols-count", Config.MaxGroupByColsCount, "MaxGroupByColsCount, 单条 SQL 中 GroupBy 包含列的最大数量")
+	maxDistinctCount := flag.Int("max-distinct-count", Config.MaxDistinctCount, "MaxDistinctCount, 单条 SQL 中 Distinct 的最大数量")
 	maxIdxColsCount := flag.Int("max-index-cols-count", Config.MaxIdxColsCount, "MaxIdxColsCount, 复合索引中包含列的最大数量")
 	maxTotalRows := flag.Int64("max-total-rows", Config.MaxTotalRows, "MaxTotalRows, 计算散粒度时，当数据行数大于MaxTotalRows即开启数据库保护模式，不计算散粒度")
 	maxQueryCost := flag.Int64("max-query-cost", Config.MaxQueryCost, "MaxQueryCost, last_query_cost 超过该值时将给予警告")
@@ -523,8 +560,9 @@ func readCmdFlags() error {
 	showLastQueryCost := flag.Bool("show-last-query-cost", Config.ShowLastQueryCost, "ShowLastQueryCost")
 	// +++++++++++++++++其他+++++++++++++++++++
 	printConfig := flag.Bool("print-config", false, "Print configs")
-	ver := flag.Bool("version", false, "Print version info")
-	query := flag.String("query", Config.Query, "Queries for analyzing")
+	checkConfig := flag.Bool("check-config", false, "Check configs")
+	printVersion := flag.Bool("version", false, "Print version info")
+	query := flag.String("query", Config.Query, "待评审的 SQL 或 SQL 文件，如 SQL 中包含特殊字符建议使用文件名。")
 	listHeuristicRules := flag.Bool("list-heuristic-rules", Config.ListHeuristicRules, "ListHeuristicRules, 打印支持的评审规则列表")
 	listRewriteRules := flag.Bool("list-rewrite-rules", Config.ListRewriteRules, "ListRewriteRules, 打印支持的重写规则列表")
 	listTestSQLs := flag.Bool("list-test-sqls", Config.ListTestSqls, "ListTestSqls, 打印测试case用于测试")
@@ -532,24 +570,18 @@ func readCmdFlags() error {
 	verbose := flag.Bool("verbose", Config.Verbose, "Verbose")
 	dryrun := flag.Bool("dry-run", Config.DryRun, "是否在预演环境执行")
 	maxPrettySQLLength := flag.Int("max-pretty-sql-length", Config.MaxPrettySQLLength, "MaxPrettySQLLength, 超出该长度的SQL会转换成指纹输出")
-	// 一个不存在log-level，用于更新usage。
-	// 因为vitess里面也用了flag，这些vitess的参数我们不需要关注
-	if !Config.Verbose {
+	// 一个不存在 log-level，用于更新 usage。
+	// 因为 vitess 里面也用了 flag，这些 vitess 的参数我们不需要关注
+	if !Config.Verbose && runtime.GOOS != "windows" {
 		flag.Usage = usage
 	}
 	flag.Parse()
 
-	if *config != "" {
-		err := Config.readConfigFile(*config)
-		if err != nil {
-			fmt.Println(err.Error())
-		}
-	}
-
 	Config.OnlineDSN = parseDSN(*onlineDSN, Config.OnlineDSN)
-	Config.TestDSN = parseDSN(*testDSN, Config.OnlineDSN)
+	Config.TestDSN = parseDSN(*testDSN, Config.TestDSN)
 	Config.AllowOnlineAsTest = *allowOnlineAsTest
 	Config.DropTestTemporary = *dropTestTemporary
+	Config.CleanupTestDatabase = *cleanupTestDatabase
 	Config.OnlySyntaxCheck = *onlySyntaxCheck
 	Config.Profiling = *profiling
 	Config.Trace = *trace
@@ -566,7 +598,11 @@ func readCmdFlags() error {
 		if BaseDir == "" {
 			Config.LogOutput = *logOutput
 		} else {
-			Config.LogOutput = BaseDir + "/" + *logOutput
+			if runtime.GOOS == "windows" {
+				Config.LogOutput = *logOutput
+			} else {
+				Config.LogOutput = BaseDir + "/" + *logOutput
+			}
 		}
 	}
 	Config.ReportType = strings.ToLower(*reportType)
@@ -581,7 +617,8 @@ func readCmdFlags() error {
 	if strings.HasPrefix(*blackList, "/") || *blackList == "" {
 		Config.BlackList = *blackList
 	} else {
-		Config.BlackList = BaseDir + "/" + *blackList
+		pwd, _ := os.Getwd()
+		Config.BlackList = pwd + "/" + *blackList
 	}
 	Config.MaxJoinTableCount = *maxJoinTableCount
 	Config.MaxGroupByColsCount = *maxGroupByColsCount
@@ -632,21 +669,9 @@ func readCmdFlags() error {
 	Config.MaxPrettySQLLength = *maxPrettySQLLength
 	Config.MaxVarcharLength = *maxVarcharLength
 
-	if *ver {
-		version()
-		os.Exit(0)
-	}
-
-	if *printConfig {
-		// 打印配置的时候密码不显示
-		if !Config.Verbose {
-			Config.OnlineDSN.Password = "********"
-			Config.TestDSN.Password = "********"
-		}
-		data, _ := yaml.Marshal(Config)
-		fmt.Print(string(data))
-		os.Exit(0)
-	}
+	PrintVersion = *printVersion
+	PrintConfig = *printConfig
+	CheckConfig = *checkConfig
 
 	hasParsed = true
 	return nil
@@ -682,6 +707,7 @@ func ParseConfig(configFile string) error {
 	err = readCmdFlags()
 	if err != nil {
 		Log.Error("ParseConfig readCmdFlags Error: %v", err)
+		return err
 	}
 
 	// parse blacklist & ignore blacklist file parse error
@@ -729,17 +755,17 @@ var ReportTypes = []ReportType{
 	},
 	{
 		Name:        "rewrite",
-		Description: "SQL重写功能，配合-rewrite-rules参数一起使用，可以通过-list-rewrite-rules查看所有支持的SQL重写规则",
+		Description: "SQL重写功能，配合-rewrite-rules参数一起使用，可以通过-list-rewrite-rules 查看所有支持的 SQL 重写规则",
 		Example:     `echo "select * from film" | soar -rewrite-rules star2columns,delimiter -report-type rewrite`,
 	},
 	{
 		Name:        "ast",
-		Description: "输出SQL的抽象语法树，主要用于测试",
+		Description: "输出 SQL 的抽象语法树，主要用于测试",
 		Example:     `echo "select * from film" | soar -report-type ast`,
 	},
 	{
 		Name:        "tiast",
-		Description: "输出SQL的TiDB抽象语法树，主要用于测试",
+		Description: "输出 SQL 的 TiDB抽象语法树，主要用于测试",
 		Example:     `echo "select * from film" | soar -report-type tiast`,
 	},
 	{
@@ -749,12 +775,12 @@ var ReportTypes = []ReportType{
 	},
 	{
 		Name:        "md2html",
-		Description: "markdown格式转html格式小工具",
+		Description: "markdown 格式转 html 格式小工具",
 		Example:     `soar -list-heuristic-rules | soar -report-type md2html > heuristic_rules.html`,
 	},
 	{
 		Name:        "explain-digest",
-		Description: "输入为EXPLAIN的表格，JSON或Vertical格式，对其进行分析，给出分析结果",
+		Description: "输入为EXPLAIN的表格，JSON 或 Vertical格式，对其进行分析，给出分析结果",
 		Example: `soar -report-type explain-digest << EOF
 +----+-------------+-------+------+---------------+------+---------+------+------+-------+
 | id | select_type | table | type | possible_keys | key  | key_len | ref  | rows | Extra |
@@ -765,8 +791,8 @@ EOF`,
 	},
 	{
 		Name:        "duplicate-key-checker",
-		Description: "对OnlineDsn中指定的DB进行索引重复检查",
-		Example:     `soar -report-type duplicate-key-checker -online-dsn user:passwd@127.0.0.1:3306/db`,
+		Description: "对 OnlineDsn 中指定的 database 进行索引重复检查",
+		Example:     `soar -report-type duplicate-key-checker -online-dsn user:password@127.0.0.1:3306/db`,
 	},
 	{
 		Name:        "html",
@@ -819,4 +845,35 @@ func ListReportTypes() {
 				"\n* **Example**:\n\n```bash\n", r.Example, "\n```\n")
 		}
 	}
+}
+
+// ArgConfig get -config arg value from cli
+func ArgConfig() string {
+	var configFile string
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "-config") {
+		if os.Args[1] == "-config" && len(os.Args) > 2 {
+			if os.Args[2] == "=" && len(os.Args) > 3 {
+				// -config = soar.yaml not support
+				fmt.Println("wrong format, no space between '=', eg: -config=soar.yaml")
+			} else {
+				// -config soar.yaml
+				configFile = os.Args[2]
+			}
+			if strings.HasPrefix(configFile, "=") {
+				// -config =soar.yaml
+				configFile = strings.Split(configFile, "=")[1]
+			}
+		}
+		if strings.Contains(os.Args[1], "=") {
+			// -config=soar.yaml
+			configFile = strings.Split(os.Args[1], "=")[1]
+		}
+	} else {
+		for i, c := range os.Args {
+			if strings.HasPrefix(c, "-config") && i != 1 {
+				fmt.Println("-config must be the first arg")
+			}
+		}
+	}
+	return configFile
 }

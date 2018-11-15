@@ -110,7 +110,7 @@ SELECT * FROM sakila.film WHERE length >= '60';
 * **Case**:
 
 ```sql
-SELECT * FROM sakila.film WHERE length >= '60';
+SELECT * FROM tb WHERE col IN (NULL);
 ```
 ## IN要慎用，元素过多会导致全表扫描
 
@@ -162,7 +162,7 @@ SELECT c1,c2,c3 FROM tbl WHERE c1 = 14 OR c1 = 17
 ```sql
 SELECT 'abc '
 ```
-## 不要使用hint，如sql\_no\_cache，force index，ignore key，straight join等
+## 不要使用hint，如sql\_no\_cache, force index, ignore key, straight join等
 
 * **Item**:ARG.010
 * **Severity**:L1
@@ -170,7 +170,7 @@ SELECT 'abc '
 * **Case**:
 
 ```sql
-SELECT 'abc '
+SELECT * FROM t1 USE INDEX (i1) ORDER BY a;
 ```
 ## 不要使用负向查询，如：NOT IN/NOT LIKE
 

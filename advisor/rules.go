@@ -115,9 +115,9 @@ func init() {
 		"OK": {
 			Item:     "OK",
 			Severity: "L0",
-			Summary:  "✔️", // heavy check mark unicode
-			Content:  `✔️`,
-			Case:     "✔️",
+			Summary:  "OK",
+			Content:  `OK`,
+			Case:     "OK",
 			Func:     (*Query4Audit).RuleOK,
 		},
 		"ALI.001": {
@@ -198,14 +198,14 @@ func init() {
 			Summary:  "参数比较包含隐式转换，无法使用索引",
 			Content:  "隐式类型转换有无法命中索引的风险，在高并发、大数据量的情况下，命不中索引带来的后果非常严重。",
 			Case:     "SELECT * FROM sakila.film WHERE length >= '60';",
-			Func:     (*Query4Audit).RuleOK, // 该建议在indexAdvisor中给
+			Func:     (*Query4Audit).RuleOK, // 该建议在IndexAdvisor中给，RuleImplicitConversion
 		},
 		"ARG.004": {
 			Item:     "ARG.004",
 			Severity: "L4",
 			Summary:  "IN (NULL)/NOT IN (NULL)永远非真",
 			Content:  "正确的作法是col IN ('val1', 'val2', 'val3') OR col IS NULL",
-			Case:     "SELECT * FROM sakila.film WHERE length >= '60';",
+			Case:     "SELECT * FROM tb WHERE col IN (NULL);",
 			Func:     (*Query4Audit).RuleIn,
 		},
 		"ARG.005": {
@@ -251,9 +251,9 @@ func init() {
 		"ARG.010": {
 			Item:     "ARG.010",
 			Severity: "L1",
-			Summary:  "不要使用hint，如sql_no_cache，force index，ignore key，straight join等",
+			Summary:  "不要使用hint，如sql_no_cache, force index, ignore key, straight join等",
 			Content:  `hint是用来强制SQL按照某个执行计划来执行，但随着数据量变化我们无法保证自己当初的预判是正确的。`,
-			Case:     "SELECT 'abc '",
+			Case:     "SELECT * FROM t1 USE INDEX (i1) ORDER BY a;",
 			Func:     (*Query4Audit).RuleHint,
 		},
 		"ARG.011": {
@@ -989,7 +989,7 @@ func init() {
 			Case:     "SELECT DISTINCT c.c_id, c.c_name FROM c,e WHERE e.c_id = c.c_id",
 			Func:     (*Query4Audit).RuleDistinctJoinUsage,
 		},
-		// TODO: 5.6有了semi join还要把in转成exists么？
+		// TODO: 5.6有了semi join 还要把 in 转成e xists 么？
 		// Use EXISTS instead of IN to check existence of data.
 		// http://www.winwire.com/25-tips-to-improve-sql-query-performance/
 		"SUB.004": {
@@ -1098,8 +1098,8 @@ func InBlackList(sql string) bool {
 }
 
 // FormatSuggest 格式化输出优化建议
-// 目前支持：json, text两种形式，其他形式会给结构体的pretty.Println
 func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[string]Rule, string) {
+	common.Log.Debug("FormatSuggest, Query: %s", sql)
 	var fingerprint, id string
 	var buf []string
 	var score = 100
@@ -1145,7 +1145,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 			delete(suggest, k)
 		}
 	}
-
+	common.Log.Debug("FormatSuggest, format: %s", format)
 	switch format {
 	case "json":
 		js, err := json.MarshalIndent(Result{
@@ -1192,6 +1192,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 			}
 		}
 		// MySQL
+		common.Log.Debug("FormatSuggest, start of sortedMySQLSuggest")
 		var sortedMySQLSuggest []string
 		for item := range suggest {
 			if strings.HasPrefix(item, "ERR") {
@@ -1213,6 +1214,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 
 		// Explain
+		common.Log.Debug("FormatSuggest, start of sortedExplainSuggest")
 		if suggest["EXP.000"].Item != "" {
 			buf = append(buf, fmt.Sprintln("## ", suggest["EXP.000"].Summary))
 			buf = append(buf, fmt.Sprintln(suggest["EXP.000"].Content))
@@ -1233,6 +1235,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 
 		// Profiling
+		common.Log.Debug("FormatSuggest, start of sortedProfilingSuggest")
 		var sortedProfilingSuggest []string
 		for item := range suggest {
 			if strings.HasPrefix(item, "PRO") {
@@ -1249,6 +1252,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 
 		// Trace
+		common.Log.Debug("FormatSuggest, start of sortedTraceSuggest")
 		var sortedTraceSuggest []string
 		for item := range suggest {
 			if strings.HasPrefix(item, "TRA") {
@@ -1265,6 +1269,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 
 		// Index
+		common.Log.Debug("FormatSuggest, start of sortedIdxSuggest")
 		var sortedIdxSuggest []string
 		for item := range suggest {
 			if strings.HasPrefix(item, "IDX") {
@@ -1293,6 +1298,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 
 		// Heuristic
+		common.Log.Debug("FormatSuggest, start of sortedHeuristicSuggest")
 		var sortedHeuristicSuggest []string
 		for item := range suggest {
 			if !strings.HasPrefix(item, "EXP") &&
@@ -1321,6 +1327,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 
 	default:
+		common.Log.Debug("unknown report-type %s", format)
 		buf = append(buf, fmt.Sprintln("Query: ", sql))
 		for _, rule := range suggest {
 			buf = append(buf, pretty.Sprint(rule))
@@ -1330,12 +1337,12 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 	// 打分
 	var str string
 	switch common.Config.ReportType {
-	case "explain-digest", "lint":
-		str = strings.Join(buf, "\n")
-	default:
+	case "markdown", "html":
 		if len(buf) > 1 {
 			str = buf[0] + "\n" + common.Score(score) + "\n\n" + strings.Join(buf[1:], "\n")
 		}
+	default:
+		str = strings.Join(buf, "\n")
 	}
 
 	return suggest, str

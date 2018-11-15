@@ -39,7 +39,7 @@ const (
 	JSONFormatExplain               // JSON格式输出
 )
 
-// ExplainFormatType EXPLAIN支持的FORMAT_TYPE
+// ExplainFormatType EXPLAIN 支持的 FORMAT_TYPE
 var ExplainFormatType = map[string]int{
 	"traditional": 0,
 	"json":        1,
@@ -80,7 +80,7 @@ type ExplainRow struct {
 	AccessType   string
 	PossibleKeys []string
 	Key          string
-	KeyLen       string // 索引长度，如果发生了index_merge， KeyLen格式为N,N，所以不能定义为整型
+	KeyLen       string // 索引长度，如果发生了index_merge， KeyLen 格式为 N,N，所以不能定义为整型
 	Ref          []string
 	Rows         int
 	Filtered     float64 // 5.6 JSON, 5.7+, 5.5 EXTENDED
@@ -88,7 +88,7 @@ type ExplainRow struct {
 	Extra        string
 }
 
-// ExplainWarning explain extended后SHOW WARNINGS输出的结果
+// ExplainWarning explain extended 后 SHOW WARNINGS 输出的结果
 type ExplainWarning struct {
 	Level   string
 	Code    int
@@ -117,7 +117,7 @@ type ExplainJSONMaterializedFromSubquery struct {
 	QueryBlock          *ExplainJSONQueryBlock `json:"query_block"`
 }
 
-// 该变量用于存放JSON到Traditional模式的所有ExplainJSONTable
+// 该变量用于存放 JSON 到 Traditional 模式的所有 ExplainJSONTable
 var explainJSONTables []*ExplainJSONTable
 
 // ExplainJSONTable JSON
@@ -350,12 +350,12 @@ var ExplainExtra = map[string]string{
 	"Start materialize":                 "Materialized subquery Start",
 	"End materialize":                   "Materialized subquery End",
 	"unique row not found":              "For a query such as SELECT ... FROM tbl_name, no rows satisfy the condition for a UNIQUE index or PRIMARY KEY on the table.",
-	//"Scan":                                                "",
-	//"Impossible ON condition":                             "",
-	//"Ft_hints:":                                           "",
-	//"Backward index scan":                                 "",
-	//"Recursive":                                           "",
-	//"Table function:":                                     "",
+	// "Scan":                                                "",
+	// "Impossible ON condition":                             "",
+	// "Ft_hints:":                                           "",
+	// "Backward index scan":                                 "",
+	// "Recursive":                                           "",
+	// "Table function:":                                     "",
 	"Index dive skipped due to FORCE":                     "This item applies to NDB tables only. It means that MySQL Cluster is using the Condition Pushdown optimization to improve the efficiency of a direct comparison between a nonindexed column and a constant. In such cases, the condition is “pushed down” to the cluster's data nodes and is evaluated on all data nodes simultaneously. This eliminates the need to send nonmatching rows over the network, and can speed up such queries by a factor of 5 to 10 times over cases where Condition Pushdown could be but is not used.",
 	"Impossible WHERE noticed after reading const tables": "查询了所有const(和system)表, 但发现WHERE查询条件不起作用.",
 	"Using where":                              "WHERE条件用于筛选出与下一个表匹配的数据然后返回给客户端. 除非故意做的全表扫描, 否则连接类型是ALL或者是index, 且在Extra列的值中没有Using Where, 则该查询可能是有问题的.",
@@ -451,8 +451,8 @@ func FormatJSONIntoTraditional(explainJSON string) []*ExplainRow {
 	return explainRows
 }
 
-// ConvertExplainJSON2Row 将JSON格式转成ROW格式，为方便统一做优化建议
-// 但是会损失一些JSON特有的分析结果
+// ConvertExplainJSON2Row 将 JSON 格式转成 ROW 格式，为方便统一做优化建议
+// 但是会损失一些 JSON 特有的分析结果
 func ConvertExplainJSON2Row(explainJSON *ExplainJSON) []*ExplainRow {
 	buf, err := json.Marshal(explainJSON)
 	if err != nil {
@@ -461,8 +461,8 @@ func ConvertExplainJSON2Row(explainJSON *ExplainJSON) []*ExplainRow {
 	return FormatJSONIntoTraditional(string(buf))
 }
 
-// 用于检测MySQL版本是否低于MySQL5.6
-// 低于5.6 返回 true， 表示需要改写非SELECT的SQL --> SELECT
+// 用于检测 MySQL 版本是否低于 MySQL5.6
+// 低于5.6 返回 true， 表示需要改写非 SELECT 的 SQL --> SELECT
 func (db *Connector) supportExplainWrite() (bool, error) {
 	defer func() {
 		err := recover()
@@ -471,19 +471,20 @@ func (db *Connector) supportExplainWrite() (bool, error) {
 		}
 	}()
 
-	// 5.6以上版本支持EXPLAIN UPDATE/DELETE等语句，但需要开启写入
-	// 如开启了read_only，EXPLAIN UPDATE/DELETE也会受限制
-	if common.Config.TestDSN.Version >= 560 {
+	// 5.6以上版本支持 EXPLAIN UPDATE/DELETE 等语句，但需要开启写入
+	// 如开启了 read_only, EXPLAIN UPDATE/DELETE 也会受限制
+	if common.Config.TestDSN.Version >= 50600 {
 		readOnly, err := db.SingleIntValue("read_only")
 		if err != nil {
 			return false, err
 		}
 		superReadOnly, err := db.SingleIntValue("super_read_only")
 		// Percona, MariaDB 5.6就已经有super_read_only了，但社区版5.6还没有这个参数
-		if strings.Contains(err.Error(), "Unknown system variable") {
+		if err != nil {
+			if !strings.Contains(err.Error(), "Unknown system variable") {
+				return false, err
+			}
 			superReadOnly = readOnly
-		} else if err != nil {
-			return false, err
 		}
 
 		if readOnly == 1 || superReadOnly == 1 {
@@ -506,8 +507,8 @@ func (db *Connector) explainAbleSQL(sql string) (string, error) {
 	}
 
 	switch stmt.(type) {
-	case *sqlparser.Insert, *sqlparser.Update, *sqlparser.Delete: // REPLACE和INSERT的AST基本相同，只是Action不同
-		// 判断Explain的SQL是否需要被改写
+	case *sqlparser.Insert, *sqlparser.Update, *sqlparser.Delete: // REPLACE 和 INSERT 的 AST 基本相同，只是 Action 不同
+		// 判断 Explain 的 SQL 是否需要被改写
 		need, err := db.supportExplainWrite()
 		if err != nil {
 			common.Log.Error("explainAbleSQL db.supportExplainWrite Error: %v", err)
@@ -540,7 +541,7 @@ func (db *Connector) executeExplain(sql string, explainType int, formatType int)
 	explainFormat := ""
 	switch formatType {
 	case JSONFormatExplain:
-		if common.Config.TestDSN.Version >= 560 {
+		if common.Config.TestDSN.Version >= 50600 {
 			explainFormat = "FORMAT=JSON"
 		}
 	}
@@ -549,7 +550,7 @@ func (db *Connector) executeExplain(sql string, explainType int, formatType int)
 	switch explainType {
 	case ExtendedExplainType:
 		// 5.6以上extended关键字已经不推荐使用，8.0废弃了这个关键字
-		if common.Config.TestDSN.Version >= 560 {
+		if common.Config.TestDSN.Version >= 50600 {
 			res, err = db.Query("explain %s", sql)
 		} else {
 			res, err = db.Query("explain extended %s", sql)
@@ -789,6 +790,8 @@ func parseTraditionalExplainText(content string) (explainRows []*ExplainRow, err
 		if err != nil {
 			filtered = 0.00
 		}
+		// filtered may larger than 100.00
+		// https://bugs.mysql.com/bug.php?id=34124
 		if filtered > 100.00 {
 			filtered = 100.00
 		}
@@ -899,12 +902,12 @@ func parseJSONExplainText(content string) (*ExplainJSON, error) {
 	return explainJSON, err
 }
 
-// ParseExplainResult 分析mysql执行explain的结果，返回ExplainInfo结构化数据
+// ParseExplainResult 分析 mysql 执行 explain 的结果，返回 ExplainInfo 结构化数据
 func ParseExplainResult(res *QueryResult, formatType int) (exp *ExplainInfo, err error) {
 	exp = &ExplainInfo{
 		ExplainFormat: formatType,
 	}
-	// JSON格式直接调用文本方式解析
+	// JSON 格式直接调用文本方式解析
 	if formatType == JSONFormatExplain {
 		exp.ExplainJSON, err = parseJSONExplainText(res.Rows[0].Str(0))
 		return exp, err
@@ -915,11 +918,11 @@ func ParseExplainResult(res *QueryResult, formatType int) (exp *ExplainInfo, err
 	for i, f := range res.Result.Fields() {
 		colIdx[i] = strings.ToLower(f.Name)
 	}
-	// 补全ExplainRows
+	// 补全 ExplainRows
 	var explainrows []*ExplainRow
 	for _, row := range res.Rows {
 		expRow := &ExplainRow{Partitions: "NULL", Filtered: 0.00}
-		// list到map的转换
+		// list 到 map 的转换
 		for i := range row {
 			switch colIdx[i] {
 			case "id":
@@ -979,9 +982,9 @@ func ParseExplainResult(res *QueryResult, formatType int) (exp *ExplainInfo, err
 	return exp, err
 }
 
-// Explain 获取SQL的explain信息
+// Explain 获取 SQL 的 explain 信息
 func (db *Connector) Explain(sql string, explainType int, formatType int) (exp *ExplainInfo, err error) {
-	exp = &ExplainInfo{}
+	exp = &ExplainInfo{SQL: sql}
 	if explainType != TraditionalExplainType {
 		formatType = TraditionalFormatExplain
 	}
@@ -1004,16 +1007,14 @@ func (db *Connector) Explain(sql string, explainType int, formatType int) (exp *
 	// 解析mysql结果，输出ExplainInfo
 	exp, err = ParseExplainResult(res, formatType)
 
-	// 补全SQL
-	exp.SQL = sql
 	return exp, err
 }
 
-// PrintMarkdownExplainTable 打印markdown格式的explain table
+// PrintMarkdownExplainTable 打印 markdown 格式的 explain table
 func PrintMarkdownExplainTable(exp *ExplainInfo) string {
 	var buf []string
 	rows := exp.ExplainRows
-	// JSON转换为TRADITIONAL格式
+	// JSON 转换为 TRADITIONAL 格式
 	if exp.ExplainFormat == JSONFormatExplain {
 		buf = append(buf, fmt.Sprint("以下为JSON格式转为传统格式EXPLAIN表格", "\n\n"))
 		rows = ConvertExplainJSON2Row(exp.ExplainJSON)

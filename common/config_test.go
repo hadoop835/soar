@@ -18,12 +18,25 @@ package common
 
 import (
 	"flag"
+	"os"
+	"runtime"
 	"testing"
 
 	"github.com/kr/pretty"
 )
 
 var update = flag.Bool("update", false, "update .golden files")
+
+func TestGetDefaultLogOutput(t *testing.T) {
+	output := getDefaultLogOutput()
+	if runtime.GOOS == "windows" && output != "nul" {
+		t.Error("windows default -log-output not nul")
+	}
+
+	if runtime.GOOS != "windows" && output != "/dev/stderr" {
+		t.Error("default -log-output not /dev/stderr")
+	}
+}
 
 func TestParseConfig(t *testing.T) {
 	err := ParseConfig("")
@@ -34,7 +47,7 @@ func TestParseConfig(t *testing.T) {
 
 func TestReadConfigFile(t *testing.T) {
 	if Config == nil {
-		Config = new(Configration)
+		Config = new(Configuration)
 	}
 	Config.readConfigFile("../soar.yaml")
 }
@@ -70,4 +83,36 @@ func TestListReportTypes(t *testing.T) {
 	if nil != err {
 		t.Fatal(err)
 	}
+}
+
+func TestArgConfig(t *testing.T) {
+	testArgs1 := [][]string{
+		{"soar", "-config", "=", "soar.yaml"},
+		{"soar", "-print-config", "-config", "soar.yaml"},
+	}
+	testArgs2 := [][]string{
+		{"soar", "-config", "soar.yaml"},
+		{"soar", "-config", "=soar.yaml"},
+		{"soar", "-config=soar.yaml"},
+	}
+	for _, args := range testArgs1 {
+		os.Args = args
+		configFile := ArgConfig()
+		if configFile != "" {
+			t.Errorf("should return '', but got %s", configFile)
+		}
+	}
+	for _, args := range testArgs2 {
+		os.Args = args
+		configFile := ArgConfig()
+		if configFile != "soar.yaml" {
+			t.Errorf("should return soar.yaml, but got %s", configFile)
+		}
+	}
+}
+
+func TestPrintConfiguration(t *testing.T) {
+	Config.Verbose = true
+	PrintConfiguration()
+
 }

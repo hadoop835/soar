@@ -45,11 +45,11 @@ type TraceRow struct {
 // Trace 执行SQL，并对其Trace
 func (db *Connector) Trace(sql string, params ...interface{}) (*QueryResult, error) {
 	common.Log.Debug("Trace SQL: %s", sql)
-	if common.Config.TestDSN.Version < 560 {
+	if common.Config.TestDSN.Version < 50600 {
 		return nil, errors.New("version < 5.6, not support trace")
 	}
 
-	// 过滤不需要Trace的SQL
+	// 过滤不需要 Trace 的 SQL
 	switch sqlparser.Preview(sql) {
 	case sqlparser.StmtSelect, sqlparser.StmtUpdate, sqlparser.StmtDelete:
 		sql = "explain " + sql
@@ -60,10 +60,10 @@ func (db *Connector) Trace(sql string, params ...interface{}) (*QueryResult, err
 
 	// 测试环境如果检查是关闭的，则SQL不会被执行
 	if common.Config.TestDSN.Disable {
-		return nil, errors.New("TestDsn Disable")
+		return nil, errors.New("Dsn Disable")
 	}
 
-	// 数据库安全性检查：如果Connector的IP端口与TEST环境不一致，则启用SQL白名单
+	// 数据库安全性检查：如果 Connector 的 IP 端口与 TEST 环境不一致，则启用SQL白名单
 	// 不在白名单中的SQL不允许执行
 	// 执行环境与test环境不相同
 	if db.Addr != common.Config.TestDSN.Addr && db.dangerousQuery(sql) {

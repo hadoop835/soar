@@ -25,7 +25,7 @@ import (
 	"github.com/astaxie/beego/logs"
 )
 
-// Log 使用beego的log库
+// Log 使用 beego 的 log 库
 var Log *logs.BeeLogger
 
 // BaseDir 日志打印在binary的根路径
@@ -39,13 +39,14 @@ func init() {
 // LoggerInit Log配置初始化
 func LoggerInit() {
 	Log.SetLevel(Config.LogLevel)
-	if Config.LogOutput == "console" {
-		err := Log.SetLogger("console")
+	if Config.LogOutput == logs.AdapterConsole {
+		err := Log.SetLogger(logs.AdapterConsole)
 		if err != nil {
 			fmt.Println(err.Error())
 		}
 	} else {
-		err := Log.SetLogger("file", fmt.Sprintf(`{"filename":"%s","level":7,"maxlines":0,"maxsize":0,"daily":false,"maxdays":0}`, Config.LogOutput))
+		func() { _ = Log.DelLogger(logs.AdapterFile) }()
+		err := Log.SetLogger(logs.AdapterFile, fmt.Sprintf(`{"filename":"%s","level":7,"maxlines":0,"maxsize":0,"daily":false,"maxdays":0}`, Config.LogOutput))
 		if err != nil {
 			fmt.Println(err.Error())
 		}
@@ -95,7 +96,7 @@ func fileName(original string) string {
 	return original[i+1:]
 }
 
-// LogIfError 简化if err != nil打Error日志代码长度
+// LogIfError 简化if err != nil 打 Error 日志代码长度
 func LogIfError(err error, format string, v ...interface{}) {
 	if err != nil {
 		_, fn, line, _ := runtime.Caller(1)
@@ -109,7 +110,7 @@ func LogIfError(err error, format string, v ...interface{}) {
 	}
 }
 
-// LogIfWarn 简化if err != nil打Warn日志代码长度
+// LogIfWarn 简化if err != nil 打 Warn 日志代码长度
 func LogIfWarn(err error, format string, v ...interface{}) {
 	if err != nil {
 		_, fn, line, _ := runtime.Caller(1)

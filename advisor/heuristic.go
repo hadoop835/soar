@@ -44,6 +44,9 @@ func (q *Query4Audit) RuleOK() Rule {
 func (q *Query4Audit) RuleImplicitAlias() Rule {
 	var rule = q.RuleOK()
 	tkns := ast.Tokenizer(q.Query)
+	if len(tkns) == 0 {
+		return rule
+	}
 	if tkns[0].Type != sqlparser.SELECT {
 		return rule
 	}
@@ -173,14 +176,15 @@ func (idxAdv *IndexAdvisor) RuleImplicitConversion() Rule {
 		var values []*sqlparser.SQLVal
 
 		// condition 左右两侧有且只有如下几种可能：
-		// 1. 左列 & 右列
-		// 2. 左列 & 右值(含函数)          (或相反)
-		// 3. 左值(含函数) & 右值(含函数)	 (无需关注)
+		// 1. 列与列比较，如： col1 = col2
+		// 2. 列与值比较，如： col = val
+		// 3. 值与值比较，如： val1 = val2 暂不处理
+		// 如果列包含在一个函数中，认为这个条件为值，如： col = func(col) 认定为 列与值比较
 		switch node := cond.(type) {
 		case *sqlparser.ComparisonExpr:
-			// 获取condition左侧的信息
+			// 获取 condition 左侧的信息
 			switch nLeft := node.Left.(type) {
-			case *sqlparser.SQLVal, *sqlparser.ValTuple:
+			case *sqlparser.SQLVal, sqlparser.ValTuple:
 				err := sqlparser.Walk(func(node sqlparser.SQLNode) (kontinue bool, err error) {
 					switch val := node.(type) {
 					case *sqlparser.SQLVal:
@@ -198,9 +202,9 @@ func (idxAdv *IndexAdvisor) RuleImplicitConversion() Rule {
 				colList = append(colList, left)
 			}
 
-			// 获取condition右侧的信息
+			// 获取 condition 右侧的信息
 			switch nRight := node.Right.(type) {
-			case *sqlparser.SQLVal, *sqlparser.ValTuple:
+			case *sqlparser.SQLVal, sqlparser.ValTuple:
 				err := sqlparser.Walk(func(node sqlparser.SQLNode) (kontinue bool, err error) {
 					switch val := node.(type) {
 					case *sqlparser.SQLVal:
@@ -306,14 +310,14 @@ func (idxAdv *IndexAdvisor) RuleImplicitConversion() Rule {
 			// 列与值比较
 			for _, val := range values {
 				if colList[0].DataType == "" {
-					common.Log.Debug("Can't get %s datatype", colList[0].Name)
+					common.Log.Debug("Can't get %s data type", colList[0].Name)
 					break
 				}
 
 				isCovered := true
-				if types, ok := typMap[val.Type]; ok {
-					for _, t := range types {
-						if strings.HasPrefix(colList[0].DataType, t) {
+				if tps, ok := typMap[val.Type]; ok {
+					for _, tp := range tps {
+						if strings.HasPrefix(colList[0].DataType, tp) {
 							isCovered = false
 						}
 					}
@@ -1224,6 +1228,17 @@ func (q *Query4Audit) RuleImpossibleWhere() Rule {
 // RuleMeaninglessWhere RES.007
 func (q *Query4Audit) RuleMeaninglessWhere() Rule {
 	var rule = q.RuleOK()
+	// SELECT * FROM tb WHERE 1
+	switch n := q.Stmt.(type) {
+	case *sqlparser.Select:
+		if n.Where != nil {
+			switch n.Where.Expr.(type) {
+			case *sqlparser.SQLVal:
+				rule = HeuristicRules["RES.007"]
+				return rule
+			}
+		}
+	}
 	// 1=1, 0=0
 	err := sqlparser.Walk(func(node sqlparser.SQLNode) (kontinue bool, err error) {
 		switch n := node.(type) {
@@ -1262,7 +1277,6 @@ func (q *Query4Audit) RuleMeaninglessWhere() Rule {
 			}
 			return false, nil
 		}
-
 		return true, nil
 	}, q.Stmt)
 	common.LogIfError(err, "")
@@ -1443,7 +1457,7 @@ func (q *Query4Audit) RuleSubqueryDepth() Rule {
 }
 
 // RuleSubQueryLimit SUB.005
-// 只有IN的SUBQUERY限制了LIMIT，FROM子句中的SUBQUERY并未限制LIMIT
+// 只有 IN 的 SUBQUERY 限制了 LIMIT, FROM 子句中的 SUBQUERY 并未限制 LIMIT
 func (q *Query4Audit) RuleSubQueryLimit() Rule {
 	var rule = q.RuleOK()
 	err := sqlparser.Walk(func(node sqlparser.SQLNode) (kontinue bool, err error) {
@@ -1887,7 +1901,7 @@ func (idxAdv *IndexAdvisor) RuleUpdatePrimaryKey() Rule {
 		err := sqlparser.Walk(func(node sqlparser.SQLNode) (kontinue bool, err error) {
 			switch node.(type) {
 			case *sqlparser.UpdateExpr:
-				// 获取set操作的全部column
+				// 获取 set 操作的全部 column
 				setColumns = append(setColumns, ast.FindAllCols(node)...)
 			}
 			return true, nil
@@ -2041,6 +2055,7 @@ func (q *Query4Audit) RuleSpaceWithQuote() Rule {
 }
 
 // RuleHint ARG.010
+// TODO: sql_no_cache, straight join
 func (q *Query4Audit) RuleHint() Rule {
 	var rule = q.RuleOK()
 	err := sqlparser.Walk(func(node sqlparser.SQLNode) (kontinue bool, err error) {
@@ -2301,7 +2316,7 @@ func (q *Query4Audit) RuleCreateDualTable() Rule {
 	var rule = q.RuleOK()
 	switch s := q.Stmt.(type) {
 	case *sqlparser.DDL:
-		if s.NewName.Name.String() == "dual" {
+		if s.Table.Name.String() == "dual" {
 			rule = HeuristicRules["TBL.003"]
 
 		}
@@ -2816,7 +2831,7 @@ func (q *Query4Audit) RuleIntPrecision() Rule {
 					switch col.Tp.Tp {
 					case mysql.TypeLong:
 						if (col.Tp.Flen < 10 || col.Tp.Flen > 11) && col.Tp.Flen > 0 {
-							// 有些语言ORM框架会生成int(11)，有些语言的框架生成int(10)
+							// 有些语言 ORM 框架会生成 int(11)，有些语言的框架生成 int(10)
 							rule = HeuristicRules["COL.016"]
 							break
 						}
@@ -2836,7 +2851,7 @@ func (q *Query4Audit) RuleIntPrecision() Rule {
 							switch col.Tp.Tp {
 							case mysql.TypeLong:
 								if (col.Tp.Flen < 10 || col.Tp.Flen > 11) && col.Tp.Flen > 0 {
-									// 有些语言ORM框架会生成int(11)，有些语言的框架生成int(10)
+									// 有些语言 ORM 框架会生成 int(11)，有些语言的框架生成 int(10)
 									rule = HeuristicRules["COL.016"]
 									break
 								}

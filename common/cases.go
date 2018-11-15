@@ -20,15 +20,15 @@ package common
 var TestSQLs []string
 
 func init() {
-	// 所有的SQL都要以分号结尾，-list-test-sqls参数会打印这个list，以分号结尾可方便测试
+	// 所有的SQL都要以分号结尾，-list-test-sqls 参数会打印这个 list，以分号结尾可方便测试
 	// 如：./soar -list-test-sql | ./soar
 	TestSQLs = []string{
-		//  single equality
+		// single equality
 		"SELECT * FROM film WHERE length = 86;",    // index(length)
 		"SELECT * FROM film WHERE length IS NULL;", // index(length)
 		"SELECT * FROM film HAVING title = 'abc';", // 无法使用索引
 
-		//single inequality
+		// single inequality
 		"SELECT * FROM sakila.film WHERE length >= 60;",   // any of <, <=, >=, >; but not <>, !=, IS NOT NULL"
 		"SELECT * FROM sakila.film WHERE length >= '60';", // Implicit Conversion
 		"SELECT * FROM film WHERE length BETWEEN 60 AND 84;",
@@ -60,13 +60,14 @@ func init() {
 		"SELECT * FROM film WHERE length = 123 ORDER BY release_year ASC, language_id DESC;",                     //  INDEX(length) mixture of ASC and DESC.",
 		"SELECT release_year FROM film WHERE length = 123 GROUP BY release_year ORDER BY release_year LIMIT 10;", //  INDEX(length, release_year)",
 		"SELECT * FROM film WHERE length = 123 ORDER BY release_year LIMIT 10;",                                  //  INDEX(length, release_year)",
-		"SELECT * FROM film ORDER BY release_year LIMIT 10;",                                                     //  INDEX(release_year)",
+		"SELECT * FROM film ORDER BY release_year LIMIT 10;",                                                     //  不能单独给release_year加索引
+		"SELECT film_id FROM film ORDER BY release_year LIMIT 10;",                                               //  TODO: INDEX(release_year)，film_id 是主键查询列满足索引覆盖的情况才会使用到 release_year 索引
 		"SELECT * FROM film WHERE length > 100 ORDER BY length LIMIT 10;",                                        //  INDEX(length) This "range" is compatible with ORDER BY
 		"SELECT * FROM film WHERE length < 100 ORDER BY length LIMIT 10;",                                        //  INDEX(length) also works
-		"SELECT * FROM customer WHERE address_id in (224,510) ORDER BY last_name;",                               // INDEX(address_id)
-		"SELECT * FROM film WHERE release_year = 2016 AND length != 1 ORDER BY title;",                           // INDEX(`release_year`, `length`, `title`)
+		"SELECT * FROM customer WHERE address_id in (224,510) ORDER BY last_name;",                               //  INDEX(address_id)
+		"SELECT * FROM film WHERE release_year = 2016 AND length != 1 ORDER BY title;",                           //  INDEX(`release_year`, `length`, `title`)
 
-		//"Covering" IdxRows
+		// "Covering" IdxRows
 		"SELECT title FROM film WHERE release_year = 1995;",                               //  INDEX(release_year, title)",
 		"SELECT title, replacement_cost FROM film WHERE language_id = 5 AND length = 70;", //  INDEX(language_id, length, title, replacement_cos film ), title, replacement_cost顺序无关，language_id, length顺序视散粒度情况.
 		"SELECT title FROM film WHERE language_id > 5 AND length > 70;",                   //  INDEX(language_id, length, title) language_id or length first (that's as far as the Algorithm goes), then the other two fields afterwards.
@@ -81,8 +82,8 @@ func init() {
 		// Join
 		// 内连接 INNER JOIN
 		// 在mysql中，inner join...on , join...on , 逗号...WHERE ，cross join...on是一样的含义。
-		// 但是在标准SQL中，它们并不等价，标准SQL中INNER JOIN与ON共同使用, CROSS JOIN用于其他情况。
-		// 逗号不支持on和using语法, 逗号的优先级要低于INNER JOIN, CROSS JOIN, LEFT JOIN
+		// 但是在标准SQL中，它们并不等价，标准 SQL 中 INNER JOIN 与 ON共同使用, CROSS JOIN用于其他情况。
+		// 逗号不支持 on 和 using 语法, 逗号的优先级要低于INNER JOIN, CROSS JOIN, LEFT JOIN
 		// ON子句的语法格式为：tb1.col1 = tb2.col2列名可以不同，筛选连接后的结果，两表的对应列值相同才在结果集中。
 		// 当模式设计对联接表的列采用了相同的命名样式时，就可以使用 USING 语法来简化 ON 语法
 
@@ -129,7 +130,7 @@ func init() {
 		"SELECT country_id, last_update FROM city NATURAL RIGHT JOIN country;",
 
 		// STRAIGHT_JOIN 实际上与内连接 INNER JOIN 表现完全一致，
-		// 不同的是使用了 STRAIGHT_JOIN后指定表载入的顺序，city先于country载入
+		// 不同的是使用了 STRAIGHT_JOIN 后指定表载入的顺序，city 先于 country 载入
 		"SELECT a.country_id, a.last_update FROM city a STRAIGHT_JOIN country b ON a.country_id=b.country_id;",
 
 		// SEMI JOIN
@@ -172,7 +173,7 @@ func init() {
 
 		// SUBQUERY
 		"SELECT * FROM film WHERE language_id = (SELECT language_id FROM language LIMIT 1);",
-		//"SELECT COUNT(*) /* no hint */ FROM t2 WHERE NOT EXISTS (SELECT * FROM t3 WHERE ROW(5 * t2.s1, 77) = (SELECT 50, 11 * s1 FROM t4 UNION SELECT 50, 77 FROM (SELECT * FROM t5) AS t5 ) ) ;",
+		// "SELECT COUNT(*) /* no hint */ FROM t2 WHERE NOT EXISTS (SELECT * FROM t3 WHERE ROW(5 * t2.s1, 77) = (SELECT 50, 11 * s1 FROM t4 UNION SELECT 50, 77 FROM (SELECT * FROM t5) AS t5 ) ) ;",
 		"SELECT * FROM city i left JOIN country o ON i.city_id=o.country_id union SELECT * FROM city i right JOIN country o ON i.city_id=o.country_id;",
 		"SELECT * FROM (SELECT * FROM actor WHERE last_update='2006-02-15 04:34:33' and last_name='CHASE') t WHERE last_update='2006-02-15 04:34:33' and last_name='CHASE' GROUP BY first_name;",
 		"SELECT * FROM city i left JOIN country o ON i.city_id=o.country_id union SELECT * FROM city i right JOIN country o ON i.city_id=o.country_id;",
@@ -193,5 +194,10 @@ func init() {
 		"alter table address add index idx_city_id(city_id);",
 		"alter table inventory add index `idx_store_film` (`store_id`,`film_id`);",
 		"alter table inventory add index `idx_store_film` (`store_id`,`film_id`),add index `idx_store_film` (`store_id`,`film_id`),add index `idx_store_film` (`store_id`,`film_id`);",
+
+		// https://github.com/XiaoMi/soar/issues/47
+		`SELECT	DATE_FORMAT(t.atm, '%Y-%m-%d'),	COUNT(DISTINCT (t.usr))	FROM usr_terminal t WHERE t.atm > '2018-10-22 00:00:00'	AND t.agent LIKE '%Chrome%'	AND t.system = 'eip' GROUP BY DATE_FORMAT(t.atm, '%Y-%m-%d')	ORDER BY DATE_FORMAT(t.atm, '%Y-%m-%d')`,
+		// https://github.com/XiaoMi/soar/issues/17
+		"create table hello.t (id int unsigned);",
 	}
 }
